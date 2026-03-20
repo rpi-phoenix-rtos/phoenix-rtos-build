@@ -39,6 +39,7 @@ endif
 
 # ARMv8 Cortex A
 TARGETS_ARMCORTEX8A := \
+	aarch64a53-generic \
 	aarch64a53-zynqmp
 
 TARGETS += $(TARGETS_ARMCORTEX8A)
