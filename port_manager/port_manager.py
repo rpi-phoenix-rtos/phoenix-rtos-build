@@ -96,6 +96,7 @@ class PortManager:
         self.find_ports = find_ports if find_ports else build_layer.find_ports
 
         self.ports_installed: list[Candidate] = []
+        self.ports_skipped: list[str] = []
 
     def add_candidate(self, candidate: Candidate) -> None:
         name = candidate.name
@@ -166,14 +167,12 @@ class PortManager:
             result = resolver.resolve([ureq])
             self.mapping[namever] = result.mapping
 
-    def read_ports_yaml(self) -> list[InstallableCandidate]:
+    def read_ports_yaml(self) -> tuple[list[InstallableCandidate], list[str]]:
         ports_dict = self.get_ports_to_build(self.args.ports_yamls)
 
         if not ports_dict:
             logger.warning("No port requirements for target. Nothing to do")
             sys.exit(0)
-
-        cands: list[InstallableCandidate] = []
 
         enable_tests = ports_dict.get("tests", True)
 
@@ -181,20 +180,33 @@ class PortManager:
             logger.error("no ports to install? (`ports:` not present in ports.yaml)")
             sys.exit(1)
 
-        for port in ports_dict["ports"]:
-            assert isinstance(port, dict)
+        cands: dict[str, InstallableCandidate] = dict()
 
-            port_name = port["name"]
+        disabled_ports = ports_dict.get("disabled-ports", [])
+        if not isinstance(disabled_ports, list) or any(not isinstance(i, str) for i in disabled_ports):
+            logger.error("'disabled-ports' should be a list of port names (strings)")
+            sys.exit(1)
+        disabled_ports = set(disabled_ports)
+
+        for port in ports_dict["ports"]:
+            if isinstance(port, str):
+                port_name = port
+            else:
+                assert isinstance(port, dict)
+                port_name = port["name"]
 
             if port_name not in self.discovered_ports:
                 logger.error("unrecognized port:", port_name)
                 sys.exit(1)
 
-            if not build_layer.str_to_bool(port.get("if", True)):
+            if port_name in disabled_ports:
+                logger.warning(f"Skipping {port_name} build due to disabled-ports")
+                self.ports_skipped.append(port_name)
                 continue
 
             port_cands = self.discovered_ports[port_name]
-            if "version" in port:
+
+            if isinstance(port, dict) and "version" in port:
                 # normalize
                 ver = str(PhxVersion(port["version"]))
 
@@ -211,19 +223,24 @@ class PortManager:
                     port_cands.values(), key=lambda c: c.version, reverse=True
                 )[0]
 
+            if isinstance(port, dict):
+                if not build_layer.str_to_bool(port.get("if", True)):
+                    cands.pop(str(cand), None)
+                    continue
+
+                cand.build_tests = port.get("tests", False) and enable_tests
+
+                use_flags = port.get("use", None)
+                if use_flags:
+                    cand.set_use_flags(use_flags)
+
             if not isinstance(cand, InstallableCandidate):
                 logger.error(f"{cand} is not installable!")
                 sys.exit(1)
 
-            cand.build_tests = port.get("tests", False) and enable_tests
+            cands[str(cand)] = cand
 
-            use_flags = port.get("use", None)
-            if use_flags:
-                cand.set_use_flags(use_flags)
-
-            cands.append(cand)
-
-        return cands
+        return list(cands.values()), disabled_ports
 
     def print_install_summary(self) -> None:
         ports_str = ""
@@ -239,13 +256,26 @@ class PortManager:
             ports_str,
             "\nTrigger legend: 'U' - user requirement, 'D' - dependency",
         )
+        if self.ports_skipped:
+            logger.info(
+                "Some user requirements were skipped due to disable-ports:",
+                "".join(["\n * " + s for s in self.ports_skipped]),
+            )
 
     def cmd_build(self) -> None:
         start = time.time()
 
         self.discover_ports()
 
-        cands = self.read_ports_yaml()
+        cands, disabled_ports = self.read_ports_yaml()
+
+        if disabled_ports:
+            for disabled_port_name in disabled_ports:
+                self.discovered_ports.pop(disabled_port_name, None)
+            logger.warning(
+                "Some ports are ignored in resolution due to disable-ports:",
+                "".join(["\n * " + s for s in disabled_ports]),
+            )
 
         self.resolve(cands)
 
