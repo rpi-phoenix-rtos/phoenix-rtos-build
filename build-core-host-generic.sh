@@ -14,7 +14,7 @@ set -e
 make -C "phoenix-rtos-kernel" install-headers
 
 b_log "Building libphoenix"
-make -C "libphoenix" -f Makefile.host all
+    make -C "libphoenix" -f Makefile.host all
 
 b_log "Building phoenix-rtos-corelibs"
 make -C "phoenix-rtos-corelibs" libtinyaes libalgo
