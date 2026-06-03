@@ -34,7 +34,7 @@ b_log "Building phoenix-rtos-devices"
 make -C "phoenix-rtos-devices" all install
 
 b_log "Building phoenix-rtos-usb (usb)"
-make -C "phoenix-rtos-usb" usb usb-install USB_HCD_LIBS="libusbxhci" USB_HOSTDRV_LIBS="libusbdrv-usbkbd"
+make -C "phoenix-rtos-usb" usb usb-install USB_HCD_LIBS="libusbxhci" USB_HOSTDRV_LIBS="libusbdrv-usbkbd libusbdrv-usbmouse"
 
 b_log "Building coreutils"
 make -C "phoenix-rtos-utils" all install
