@@ -20,6 +20,13 @@ reset_env() {
 	elif [[ "$TARGET_FAMILY" == "arm"* ]]; then
 		HOST_TARGET="arm"
 		HOST="arm-phoenix"
+	elif [[ "$TARGET_FAMILY" == "aarch64"* ]]; then
+		# Normalize the autotools host triplet: TARGET_FAMILY carries the
+		# core suffix (e.g. aarch64a72), which config.sub does not recognize
+		# as a machine. The canonical triplet matching the CROSS prefix
+		# (aarch64-phoenix-gcc) is aarch64-phoenix.
+		HOST_TARGET="$TARGET_FAMILY"
+		HOST="aarch64-phoenix"
 	elif [ "$TARGET_FAMILY" = "sparcv8leon" ]; then
 		HOST_TARGET="sparc"
 		HOST="sparc-phoenix"
