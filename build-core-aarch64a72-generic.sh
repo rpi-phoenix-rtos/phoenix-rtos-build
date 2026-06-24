@@ -34,7 +34,13 @@ b_log "Building phoenix-rtos-devices"
 make -C "phoenix-rtos-devices" all install
 
 b_log "Building phoenix-rtos-usb (usb)"
-make -C "phoenix-rtos-usb" usb usb-install USB_HCD_LIBS="libusbxhci" USB_HOSTDRV_LIBS="libusbdrv-usbkbd libusbdrv-usbmouse"
+# libvcmbox follows libusbxhci on the HCD link line: the BCM2711 PCIe/VL805
+# bring-up in libusbxhci (bcm2711-pcie.c) calls vcmbox_call() to route its
+# firmware-notify mailbox transaction through the serializing rpi4-vcmbox
+# server. libvcmbox.a is built+installed into the shared per-target prefix by
+# the preceding "phoenix-rtos-devices all install"; order matters so the linker
+# resolves the libusbxhci -> libvcmbox reference.
+make -C "phoenix-rtos-usb" usb usb-install USB_HCD_LIBS="libusbxhci libvcmbox" USB_HOSTDRV_LIBS="libusbdrv-usbkbd libusbdrv-usbmouse"
 
 b_log "Building coreutils"
 make -C "phoenix-rtos-utils" all install
