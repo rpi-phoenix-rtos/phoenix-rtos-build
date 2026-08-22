@@ -71,7 +71,7 @@ AS=${CROSS}as
 LD=${CROSS}ld
 AR=${CROSS}ar
 
-MAKEFLAGS="--no-print-directory -j 9"
+MAKEFLAGS="--no-print-directory -j $(nproc)"
 
 # export flags for ports - call make only after all necessary env variables are already set
 EXPORT_CFLAGS="$(make -f phoenix-rtos-build/Makefile.common export-cflags)"
