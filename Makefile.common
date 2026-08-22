@@ -137,6 +137,14 @@ LDFLAGS += $(LDFLAGS_GC_SECTIONS)
 LDFLAGS_WHOLE_ARCHIVE_BEGIN ?= $(LDFLAGS_PREFIX)--whole-archive
 LDFLAGS_WHOLE_ARCHIVE_END ?= $(LDFLAGS_PREFIX)--no-whole-archive
 
+# Pin the C/C++ language standard. A newer compiler's changed default silently
+# alters language semantics: gcc >= 15 defaults to gnu23/C23, where an implicit
+# function declaration is a hard error, which breaks gnulib-based ports (coreutils
+# etc.). gnu17/gnu++17 match the gcc-14 default the codebase was written against.
+# Placed before the EXPORT_*FLAGS capture so ports inherit it too. No-op on gcc-14.
+CFLAGS += -std=gnu17
+CXXFLAGS += -std=gnu++17
+
 ### right now we should have only target-necessary flags, save them for exporting (for building ports) ###
 EXPORT_CFLAGS := $(CFLAGS)
 EXPORT_CXXFLAGS := $(CXXFLAGS)
