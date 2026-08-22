@@ -62,12 +62,12 @@ if command -v "${TARGET}-gcc" > /dev/null; then
     exit 1
 fi
 
-BINUTILS=binutils-2.43
-GCC=gcc-14.2.0
+BINUTILS=binutils-2.47
+GCC=gcc-16.2.0
 
 TOOLCHAIN_PREFIX="${BUILD_ROOT}/${TARGET}"
 SYSROOT="${TOOLCHAIN_PREFIX}/${TARGET}"
-MAKEFLAGS="-j9 -s"
+MAKEFLAGS="-j$(nproc) -s"
 export MAKEFLAGS PATH
 
 mkdir -p "${TOOLCHAIN_PREFIX}"
