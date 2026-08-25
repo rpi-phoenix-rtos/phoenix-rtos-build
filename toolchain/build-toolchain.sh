@@ -75,11 +75,30 @@ mkdir -p "${BUILD_DIR}"
 cp "$SCRIPT_DIR"/*.patch "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
+# fetch_gnu <path-under-gnu> <output-file>
+# The GNU tree is mirrored identically across many hosts. Fetching the binutils
+# and GCC tarballs from a single mirror makes that host a single point of failure
+# for the very first step of a clean build — if it is down (as mirrors do go down
+# for hours), nothing builds. Try several well-known mirrors in turn instead.
+fetch_gnu() {
+    local rel=$1 out=$2 base
+    for base in \
+        https://ftp.gnu.org/gnu \
+        https://mirrors.kernel.org/gnu \
+        http://www.mirrorservice.org/sites/ftp.gnu.org/gnu; do
+        wget -t 2 -O "$out" "$base/$rel" && return 0
+        rm -f "$out"
+        log "  mirror failed: $base/$rel — trying next"
+    done
+    log "ERROR: could not download $rel from any GNU mirror"
+    return 1
+}
+
 download() {
     log "downloading packages"
 
-    [ ! -f ${BINUTILS}.tar.bz2 ] && wget "http://www.mirrorservice.org/sites/ftp.gnu.org/gnu/binutils/${BINUTILS}.tar.bz2"
-    [ ! -f ${GCC}.tar.xz ] && wget "http://www.mirrorservice.org/sites/ftp.gnu.org/gnu/gcc/${GCC}/${GCC}.tar.xz"
+    [ ! -f ${BINUTILS}.tar.bz2 ] && fetch_gnu "binutils/${BINUTILS}.tar.bz2" "${BINUTILS}.tar.bz2"
+    [ ! -f ${GCC}.tar.xz ] && fetch_gnu "gcc/${GCC}/${GCC}.tar.xz" "${GCC}.tar.xz"
 
     log "extracting packages"
     [ ! -d ${BINUTILS} ] && tar jxf ${BINUTILS}.tar.bz2
