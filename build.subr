@@ -28,15 +28,49 @@ b_install() {
 	done
 }
 
-
 b_log() {
 	echo -e "\033[1;33m--- $1 ---\033[0m"
 }
-
 
 b_die() {
 	echo -e "\033[1;31mFAILED: $1\033[0m"
 	exit 1
 }
 
-export -f b_log b_install b_die
+# b_make_test(dir ...) - build and install unit tests of the given repositories
+#
+# Which tests take part is decided by the makefiles (DEFAULT_TEST_COMPONENTS) -
+# a repository without any is a no-op.
+b_make_test() {
+	local dir
+	for dir in "$@"; do
+		make -C "$dir" test-install
+	done
+}
+
+# b_make_test_run(dir ...) - build, install and run unit tests of the given
+# repositories
+#
+# Only possible where the build host is the target; cross-built tests are
+# installed into the rootfs and run on the device instead. Every repository is
+# run even if an earlier one failed - a report stopping at the first broken suite
+# is of little use in CI - and the failure is propagated afterwards.
+b_make_test_run() {
+	local dir rc=0
+
+	# host builds are sanitized and build.sh re-execs under bear, whose libear
+	# re-injects LD_PRELOAD into every descendant on exec - ASan then finds its
+	# runtime is not first in the library list and refuses to start. The binaries
+	# link it themselves, so only the ordering check is in the way.
+	export ASAN_OPTIONS="verify_asan_link_order=0${ASAN_OPTIONS:+,$ASAN_OPTIONS}"
+
+	for dir in "$@"; do
+		make -C "$dir" test-run || rc=$?
+		# ... but a run interrupted from the keyboard should stop right there
+		# rather than start the next repository
+		[ "$rc" -eq 130 ] && break
+	done
+	return $rc
+}
+
+export -f b_log b_install b_die b_make_test b_make_test_run
