@@ -65,12 +65,39 @@ b_port_apply_patches() {
 	trap "$(shopt -p nullglob)" RETURN
 	shopt -s nullglob
 
+	# The marker records the patch's CONTENT hash, not just its name.
+	#
+	# Keyed on the filename alone, a patch that is regenerated in place -- same
+	# name, different hunks -- is silently skipped, and the port keeps building
+	# the OLD patch's source with no diagnostic at all. That is not theoretical
+	# here: the game ports' patches are generated from their forks
+	# (scripts/game-port-patch.sh in the coordination repo), so their content
+	# changes while their names never do.
+	#
+	# Re-applying the new patch on top of the old one's hunks would conflict or,
+	# worse, half-apply, so a changed patch is a hard error naming the fix: the
+	# work directory has to be re-extracted.
 	for patchfile in "${patch_dir}"/*.patch; do
-		if [ ! -f "${marker_dir}/$(basename "${patchfile}").applied" ]; then
-			echo "applying patch: ${patchfile}"
-			patch -d "${srcdir}" -p1 <"${patchfile}"
-			touch "${marker_dir}/$(basename "${patchfile}").applied"
+		local marker="${marker_dir}/$(basename "${patchfile}").applied"
+		local want have
+		want="$(sha256sum "${patchfile}" | cut -d' ' -f1)"
+
+		if [ -f "${marker}" ]; then
+			have="$(cat "${marker}" 2>/dev/null)"
+			if [ "${have}" = "${want}" ]; then
+				continue
+			fi
+			b_die "patch changed since it was applied: $(basename "${patchfile}")
+  applied: ${have:-<unrecorded, pre-hash marker>}
+  current: ${want}
+  The work directory still holds the OLD patch's hunks, so this build would
+  ship source that matches neither. Remove ${PREFIX_PORT_BUILD:-the port work
+  directory} (or run a full clean build) so the port is re-extracted."
 		fi
+
+		echo "applying patch: ${patchfile}"
+		patch -d "${srcdir}" -p1 <"${patchfile}"
+		printf '%s\n' "${want}" >"${marker}"
 	done
 }
 
