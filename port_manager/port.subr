@@ -126,5 +126,68 @@ b_use_ensure() {
 
 # TODO: add more USE flag helpers
 
+
+# b_port_invalidate_stale_configure(workdir)
+#
+# Autoconf freezes its libc feature detection into config.status/config.h, and
+# ports re-run ./configure only when config.status is missing. So a port first
+# configured before libphoenix implemented some function keeps compiling its
+# own fallback forever -- and once the libc HEADER declares that function, the
+# port's `static` fallback is no longer merely redundant but a hard error:
+#
+#   evdns.c: error: static declaration of 'strtok_r' follows
+#                   non-static declaration
+#
+# That broke the whole ports stage after libphoenix gained strtok_r, with
+# libevent still carrying a config.log from five days earlier. Sixteen ports
+# share the same guard, so this recurs every time we implement a libc function.
+#
+# Fix: fingerprint the libc API -- the sorted list of symbols libphoenix
+# defines -- and drop config.status when it changes, which makes the port's own
+# guard re-configure. Keyed on SYMBOLS rather than the archive's mtime or hash,
+# so an ordinary rebuild that changes no API does not force all sixteen ports
+# to re-run configure. If the key cannot be computed the cached configuration
+# is kept: a missing nm must not silently reconfigure everything.
+b_port_invalidate_stale_configure() {
+	local workdir="$1"
+	local stamp="${workdir}/.phoenix-libc-api"
+	local sysroot lib nm key
+
+	if [ ! -f "${workdir}/config.status" ]; then
+		return 0
+	fi
+
+	sysroot="$(printf '%s %s' "${CFLAGS:-}" "${LDFLAGS:-}" | tr ' ' '\n' | sed -n 's|^--sysroot=||p' | head -n 1)"
+	lib="${sysroot%/}/lib/libphoenix.a"
+	if [ -z "$sysroot" ] || [ ! -f "$lib" ]; then
+		return 0
+	fi
+
+	nm=""
+	for candidate in "${HOST:-}-nm" "${CROSS_COMPILE:-}nm"; do
+		if [ "$candidate" != "-nm" ] && command -v "$candidate" >/dev/null 2>&1; then
+			nm="$candidate"
+			break
+		fi
+	done
+	if [ -z "$nm" ]; then
+		return 0
+	fi
+
+	key="$("$nm" --defined-only --extern-only "$lib" 2>/dev/null | awk '{ print $NF }' | sort -u | sha256sum | cut -d' ' -f1)"
+	if [ -z "$key" ]; then
+		return 0
+	fi
+
+	if [ -f "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ]; then
+		return 0
+	fi
+
+	echo "port: libc API changed since this port was configured -- re-running configure"
+	rm -f "${workdir}/config.status"
+	printf '%s\n' "$key" >"$stamp"
+}
+
 export -f b_port_download b_port_apply_patches b_install_host \
+	b_port_invalidate_stale_configure \
 	b_dependency_dir b_use b_use_ensure

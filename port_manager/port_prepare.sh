@@ -110,6 +110,12 @@ mkdir -p "${PREFIX_H}"
 mkdir -p "${PREFIX_A}"
 
 [[ $(type -t p_common) == function ]] && p_common # definition is optional
+
+# Ports guard ./configure with `if [ ! -f config.status ]`, which freezes
+# autoconf's libc feature detection at first configure. Invalidate it here when
+# the libc API has changed, so p_prepare's own guard re-configures.
+b_port_invalidate_stale_configure "${PREFIX_PORT_WORKDIR}"
+
 p_prepare
 
 printenv -0 >&"${fd}"
