@@ -180,7 +180,13 @@ b_port_invalidate_stale_configure() {
 	local stamp="${workdir}/.phoenix-libc-api"
 	local sysroot lib nm key
 
-	if [ ! -f "${workdir}/config.status" ]; then
+	# "Has this port been configured?" cannot be answered by config.status alone:
+	# recipes guard on different markers (config.status / Makefile / config.h), and
+	# an earlier invalidation may itself have removed config.status while leaving
+	# the others -- in which case returning here would strand the port in a
+	# half-configured state that make cannot repair. Proceed if ANY marker exists.
+	if [ ! -f "${workdir}/config.status" ] && [ ! -f "${workdir}/config.h" ] &&
+		[ ! -f "${workdir}/Makefile" ]; then
 		return 0
 	fi
 
