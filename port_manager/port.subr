@@ -87,6 +87,28 @@ b_port_apply_patches() {
 			if [ "${have}" = "${want}" ]; then
 				continue
 			fi
+			# The work directory holds the OLD patch's hunks, so building it
+			# would ship source matching neither patch. Refusing is right, but
+			# refusing FOREVER is not: the fix is always the same mechanical
+			# step, and leaving it to a human means every patch regeneration
+			# costs a failed build (and, in the unattended build loop, a whole
+			# wasted cycle). So clear the stale tree here and let the next run
+			# re-extract and apply cleanly -- one failure, then self-healing.
+			#
+			# The patch is the source of truth; a work directory is a build
+			# artifact. Set PHOENIX_PORT_KEEP_STALE_WORKDIR=1 to keep it when
+			# you are mid-debug with local edits in there.
+			if [ "${PHOENIX_PORT_KEEP_STALE_WORKDIR:-0}" != 1 ] &&
+				[ -n "${PREFIX_PORT_BUILD:-}" ] && [ -d "${PREFIX_PORT_BUILD}" ]; then
+				echo "port: clearing stale work directory ${PREFIX_PORT_BUILD}"
+				rm -rf "${PREFIX_PORT_BUILD}"
+				b_die "patch changed since it was applied: $(basename "${patchfile}")
+  applied: ${have:-<unrecorded, pre-hash marker>}
+  current: ${want}
+  The stale work directory has been REMOVED, so simply re-run the build and the
+  port will be re-extracted and re-patched. (PHOENIX_PORT_KEEP_STALE_WORKDIR=1
+  keeps it if you have local edits to preserve.)"
+			fi
 			b_die "patch changed since it was applied: $(basename "${patchfile}")
   applied: ${have:-<unrecorded, pre-hash marker>}
   current: ${want}
