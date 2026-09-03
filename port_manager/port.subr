@@ -210,8 +210,22 @@ b_port_invalidate_stale_configure() {
 		return 0
 	fi
 
+	# Remove EVERY marker a recipe might guard its configure step on, not just
+	# config.status. Recipes in this tree use at least three styles --
+	# `[ ! -f config.status ]` (most), `[ ! -f Makefile ]` (libpng) and
+	# `[ ! -f config.h ]` (bash) -- so deleting only config.status leaves such a
+	# port believing it is configured while make then tries to regenerate the
+	# file we removed:
+	#
+	#   /bin/sh: 0: cannot open ./config.status: No such file
+	#   make: *** [Makefile:787: config.status] Error 2
+	#
+	# config.cache goes too: it holds the previous run's answers about the libc,
+	# which is exactly what changed (recipes that seed a committed cross cache
+	# re-copy it before configure, so nothing is lost).
 	echo "port: libc API changed since this port was configured -- re-running configure"
-	rm -f "${workdir}/config.status"
+	rm -f "${workdir}/config.status" "${workdir}/config.cache" \
+		"${workdir}/config.h" "${workdir}/Makefile"
 	printf '%s\n' "$key" >"$stamp"
 }
 
