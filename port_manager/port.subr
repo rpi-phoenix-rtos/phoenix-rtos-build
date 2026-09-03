@@ -222,14 +222,33 @@ b_port_invalidate_stale_configure() {
 	#   /bin/sh: 0: cannot open ./config.status: No such file
 	#   make: *** [Makefile:787: config.status] Error 2
 	#
-	# Makefile is deliberately absent from this list: configure regenerates it
-	# from Makefile.in, and for a non-autoconf port it is source. config.cache
-	# goes because it caches the previous run's answers ABOUT THE LIBC, which is
-	# precisely what changed (recipes seeding a committed cross cache re-copy it
-	# before configure, so nothing is lost).
+	# config.cache goes because it caches the previous run's answers ABOUT THE
+	# LIBC, which is precisely what changed (recipes seeding a committed cross
+	# cache re-copy it before configure, so nothing is lost).
 	echo "port: libc API changed since this port was configured -- re-running configure"
 	rm -f "${workdir}/config.status" "${workdir}/config.cache" \
 		"${workdir}/config.h" "${workdir}/config.log"
+
+	# Makefile is a configure marker too, for coreutils, python and openssl111,
+	# which guard their configure step on `[ ! -f .../Makefile ]`. Leaving it
+	# behind is worse than deleting either file alone: the recipe believes it is
+	# configured and skips configure, then the stale Makefile tries to regenerate
+	# the config.status we just deleted --
+	#
+	#   /bin/bash: ./config.status: No such file or directory
+	#   make: *** [Makefile:8896: config.status] Error 127
+	#
+	# which is exactly what happened to coreutils-9.5 on 2026-09-03.
+	#
+	# Only when a Makefile.in sits next to it: that proves configure generated the
+	# Makefile. For a port that ships its Makefile as source (busybox and friends)
+	# there is no Makefile.in, and deleting it would destroy the work directory --
+	# though such a port has no config.status/config.log either, so the gate above
+	# has already returned. Requiring Makefile.in makes that safety explicit rather
+	# than a consequence of an earlier check.
+	if [ -f "${workdir}/Makefile.in" ]; then
+		rm -f "${workdir}/Makefile"
+	fi
 	printf '%s\n' "$key" >"$stamp"
 }
 
