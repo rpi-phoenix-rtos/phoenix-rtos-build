@@ -180,13 +180,11 @@ b_port_invalidate_stale_configure() {
 	local stamp="${workdir}/.phoenix-libc-api"
 	local sysroot lib nm key
 
-	# "Has this port been configured?" cannot be answered by config.status alone:
-	# recipes guard on different markers (config.status / Makefile / config.h), and
-	# an earlier invalidation may itself have removed config.status while leaving
-	# the others -- in which case returning here would strand the port in a
-	# half-configured state that make cannot repair. Proceed if ANY marker exists.
-	if [ ! -f "${workdir}/config.status" ] && [ ! -f "${workdir}/config.h" ] &&
-		[ ! -f "${workdir}/Makefile" ]; then
+	# Act only on an AUTOCONF tree, identified by config.status or config.log.
+	# Makefile must NOT be part of this test: for a non-autoconf port (busybox and
+	# friends) the Makefile IS the shipped source, so treating it as configure
+	# output would destroy the work directory.
+	if [ ! -f "${workdir}/config.status" ] && [ ! -f "${workdir}/config.log" ]; then
 		return 0
 	fi
 
@@ -216,22 +214,22 @@ b_port_invalidate_stale_configure() {
 		return 0
 	fi
 
-	# Remove EVERY marker a recipe might guard its configure step on, not just
-	# config.status. Recipes in this tree use at least three styles --
-	# `[ ! -f config.status ]` (most), `[ ! -f Makefile ]` (libpng) and
-	# `[ ! -f config.h ]` (bash) -- so deleting only config.status leaves such a
-	# port believing it is configured while make then tries to regenerate the
-	# file we removed:
+	# Delete the autoconf OUTPUTS. Recipes guard their configure step on
+	# different markers -- config.status for most, config.h for bash -- so
+	# removing only one leaves a port believing it is configured while make then
+	# tries to regenerate the file we deleted:
 	#
 	#   /bin/sh: 0: cannot open ./config.status: No such file
 	#   make: *** [Makefile:787: config.status] Error 2
 	#
-	# config.cache goes too: it holds the previous run's answers about the libc,
-	# which is exactly what changed (recipes that seed a committed cross cache
-	# re-copy it before configure, so nothing is lost).
+	# Makefile is deliberately absent from this list: configure regenerates it
+	# from Makefile.in, and for a non-autoconf port it is source. config.cache
+	# goes because it caches the previous run's answers ABOUT THE LIBC, which is
+	# precisely what changed (recipes seeding a committed cross cache re-copy it
+	# before configure, so nothing is lost).
 	echo "port: libc API changed since this port was configured -- re-running configure"
 	rm -f "${workdir}/config.status" "${workdir}/config.cache" \
-		"${workdir}/config.h" "${workdir}/Makefile"
+		"${workdir}/config.h" "${workdir}/config.log"
 	printf '%s\n' "$key" >"$stamp"
 }
 
