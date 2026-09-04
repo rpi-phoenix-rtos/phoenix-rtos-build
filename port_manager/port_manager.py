@@ -237,14 +237,47 @@ class PortManager:
             return Path(os.environ["PREFIX_BUILD"]) / ".port_state"
         return None
 
-    @staticmethod
-    def _build_state(cand: InstallableCandidate) -> dict:
-        return {"use_flags": sorted(cand.use_flags), "tests": cand.build_tests}
+    def _dep_namevers(self, cand: InstallableCandidate) -> list[str]:
+        """The resolved name-version of every installable dependency of `cand`.
+
+        Part of the build state, because a dependency's VERSION change has to
+        rebuild its dependents. Without it, bumping a port (openssl 1.1.1a ->
+        1.1.1w, 2026-09-04) left every dependent binary statically linked
+        against the old library while the tree claimed the new one -- the port
+        itself rebuilt, python/wpa_supplicant/lighttpd/openvpn/sscep/openiked
+        did not, and nothing said so. USE flags were already tracked here; the
+        version was the missing half.
+
+        Compared by str(), not identity: the same port can appear as distinct
+        candidate objects in different resolution mappings.
+        """
+        deps: set[str] = set()
+        want = str(cand)
+        for mapping in self.mapping.values():
+            for c in mapping.values():
+                if not isinstance(c, InstallableCandidate) or str(c) != want:
+                    continue
+                for dep_c in c.iter_installable_dep_cands(mapping):
+                    deps.add(str(dep_c))
+        return sorted(deps)
+
+    def _build_state(self, cand: InstallableCandidate) -> dict:
+        return {
+            "use_flags": sorted(cand.use_flags),
+            "tests": cand.build_tests,
+            "deps": self._dep_namevers(cand),
+        }
 
     def clean_stale_ports(self) -> None:
-        """Compare current USE flag state with the saved state from the last
-        build.  If any port's state changed, clean it and all transitive
-        dependents so they are rebuilt from scratch."""
+        """Compare the saved build state with the current one. If a port's USE
+        flags, test selection or resolved DEPENDENCY VERSIONS changed, clean it
+        and all transitive dependents so they are rebuilt from scratch.
+
+        NOTE: state files written before "deps" existed do not carry that key,
+        so the first run after this change treats every port as stale and
+        rebuilds the whole ports stage once. That is the intended cost -- the
+        alternative is keeping binaries whose dependency versions nobody
+        verified."""
         state_dir = self._get_state_dir()
         if state_dir is None:
             return

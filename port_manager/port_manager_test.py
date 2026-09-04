@@ -816,7 +816,7 @@ def test_build_state_saved(fix, tmp_path):
     import json
 
     state = json.loads(state_file.read_text())
-    assert state == {"use_flags": ["ssl"], "tests": False}
+    assert state == {"use_flags": ["ssl"], "tests": False, "deps": []}
 
 
 def test_no_stale_when_flags_unchanged(fix, tmp_path):
@@ -853,6 +853,28 @@ def test_stale_on_flag_remove(fix, tmp_path):
     assert "foo-1.2.3" in pm.stale_ports
 
 
+def test_stale_on_dependency_version_bump(fix, tmp_path):
+    """Bumping a dependency's VERSION must mark its dependents stale.
+
+    The regression this guards: openssl 1.1.1a -> 1.1.1w rebuilt openssl itself
+    and left every dependent linked against the old library, because the build
+    state tracked USE flags but not the resolved dependency versions.
+    """
+    run_dry_build(
+        {"foo-1.2.3": {"requires": "bar>=1.0"}, "bar-1.0.0": {}},
+        {"ports": [{"name": "foo"}]},
+        state_dir=tmp_path,
+    )
+
+    # Same foo, but bar now resolves to a newer version.
+    pm = run_dry_build(
+        {"foo-1.2.3": {"requires": "bar>=1.0"}, "bar-2.0.0": {}},
+        {"ports": [{"name": "foo"}]},
+        state_dir=tmp_path,
+    )
+    assert "foo-1.2.3" in pm.stale_ports
+
+
 def test_stale_propagates_to_dependents(fix, tmp_path):
     """If a dep's flags change, all ports depending on it are also stale."""
     all_ports = {
@@ -885,7 +907,7 @@ def test_stale_state_file_updated_after_rebuild(fix, tmp_path):
     import json
 
     state = json.loads((tmp_path / "foo-1.2.3.json").read_text())
-    assert state == {"use_flags": ["crypto", "ssl"], "tests": False}
+    assert state == {"use_flags": ["crypto", "ssl"], "tests": False, "deps": []}
 
 
 def test_stale_via_propagated_flags(fix, tmp_path):
