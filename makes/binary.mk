@@ -91,10 +91,31 @@ $(INSTALLED_HEADERS.$(NAME)): $(PREFIX_H)%.h: $(LOCAL_DIR)%.h
 $(INSTALLED_HEADERS_TREE.$(NAME)): $(PREFIX_H)%.h: $(ABS_HEADERS_DIR)/%.h
 	$(HEADER)
 
+# Every program links libc, so every program must RELINK when libc changes.
+#
+# Without this the link rule depends only on the component's own objects and the
+# libs it names in LIBS -- and most components do not name libphoenix, they get
+# it from the toolchain/sysroot. So a libphoenix fix silently failed to reach
+# them: on 2026-09-04 a stdio fix (a double fclose() writing through NULL) left
+# 119 of 336 ELFs in the rootfs still linked against the previous libphoenix,
+# caught only by scripts/check-no-stale-binaries.sh in the coordination repo and
+# repaired by deleting _build/<target>/prog{,.stripped} by hand. The ABI had not
+# changed, so those binaries worked -- which is exactly why this must not depend
+# on anyone noticing.
+#
+# $(wildcard ...) keeps it safe where there is no sysroot libc (the host build,
+# a cold tree before the core stage): the prerequisite list is simply empty
+# rather than naming a file with no rule to build it.
+ifneq ($(PREFIX_SYSROOT),)
+LIBC_RELINK_DEP := $(wildcard $(PREFIX_SYSROOT)/lib/libphoenix.a)
+else
+LIBC_RELINK_DEP :=
+endif
+
 # rule for linking binary
 # NOTE: if applied globally, we could remove the $(LINK) variable and put explicit commands here
 # NOTE: disabled $(PHOENIXLIB) direct dependency until it can be removed from $(LIBS)
-$(PREFIX_PROG)$(NAME): $(OBJS.$(NAME)) $(RESOLVED_LIBS) # $(PHOENIXLIB)
+$(PREFIX_PROG)$(NAME): $(OBJS.$(NAME)) $(RESOLVED_LIBS) $(LIBC_RELINK_DEP) # $(PHOENIXLIB)
 	$(LINK)
 
 # create component phony targets
