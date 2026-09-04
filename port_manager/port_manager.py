@@ -17,6 +17,7 @@ from collections.abc import Sequence, Generator
 
 import sys
 import time
+import hashlib
 import json
 import os
 
@@ -261,11 +262,44 @@ class PortManager:
                     deps.add(str(dep_c))
         return sorted(deps)
 
+    @staticmethod
+    def _recipe_digest(cand: InstallableCandidate) -> str:
+        """sha256 over the port's DEFINITION DIRECTORY (port.def.sh, patches,
+        config files, ...), so editing a recipe rebuilds the port.
+
+        Without it the build state could not see a recipe change at all: an edit
+        to port.def.sh or to an auxiliary file it copies in (openssl111's
+        30-phoenix.conf, a patch, a config.site) left the already-built port
+        untouched, and the only way to force a rebuild was to delete the state
+        file by hand. That is the same silent-staleness family as the dependency
+        version this state now tracks.
+
+        Tarballs are skipped: the recipe already pins each by size+sha256, and
+        they are large. A file that cannot be read counts as a change rather
+        than being ignored, so an unreadable recipe never looks unchanged.
+        """
+        port_dir = Path(cand.definition_path).parent
+        h = hashlib.sha256()
+        try:
+            paths = sorted(q for q in port_dir.rglob("*") if q.is_file())
+        except OSError:
+            return "unreadable"
+        for q in paths:
+            if q.suffix in (".gz", ".bz2", ".xz", ".zst", ".tgz", ".zip"):
+                continue
+            h.update(str(q.relative_to(port_dir)).encode())
+            try:
+                h.update(q.read_bytes())
+            except OSError:
+                h.update(b"<unreadable>")
+        return h.hexdigest()
+
     def _build_state(self, cand: InstallableCandidate) -> dict:
         return {
             "use_flags": sorted(cand.use_flags),
             "tests": cand.build_tests,
             "deps": self._dep_namevers(cand),
+            "recipe": self._recipe_digest(cand),
         }
 
     def clean_stale_ports(self) -> None:

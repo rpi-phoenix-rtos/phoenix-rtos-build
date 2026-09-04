@@ -9,6 +9,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #
 
+from pathlib import Path
 import pytest
 import os
 import tempfile
@@ -816,7 +817,10 @@ def test_build_state_saved(fix, tmp_path):
     import json
 
     state = json.loads(state_file.read_text())
-    assert state == {"use_flags": ["ssl"], "tests": False, "deps": []}
+    assert state["use_flags"] == ["ssl"]
+    assert state["tests"] is False
+    assert state["deps"] == []
+    assert len(state["recipe"]) == 64  # sha256 of the port definition directory
 
 
 def test_no_stale_when_flags_unchanged(fix, tmp_path):
@@ -851,6 +855,39 @@ def test_stale_on_flag_remove(fix, tmp_path):
         all_ports, {"ports": [{"name": "foo", "use": ["ssl"]}]}, state_dir=tmp_path
     )
     assert "foo-1.2.3" in pm.stale_ports
+
+
+def test_recipe_digest_changes_on_edit(tmp_path):
+    """The recipe digest must change when the port definition changes.
+
+    Before it existed, an edit to port.def.sh or to an auxiliary file the recipe
+    installs (openssl111's 30-phoenix.conf, a patch) changed nothing in the build
+    state, so the port was never rebuilt and the only remedy was deleting the
+    state file by hand. Tarballs are skipped -- the recipe pins each by
+    size+sha256 already, and they are large.
+    """
+    class FakeCand:
+        def __init__(self, path):
+            self.definition_path = str(path)
+
+    port_dir = tmp_path / "foo"
+    port_dir.mkdir()
+    definition = port_dir / "port.def.sh"
+    definition.write_text("version=1\n")
+    cand = FakeCand(definition)
+
+    before = PortManager._recipe_digest(cand)
+    definition.write_text("version=1\n# an edit\n")
+    after = PortManager._recipe_digest(cand)
+    assert before != after
+
+    (port_dir / "patches").mkdir()
+    (port_dir / "patches" / "01-x.patch").write_text("--- a\n+++ b\n")
+    assert PortManager._recipe_digest(cand) != after, "patches must count"
+
+    with_patch = PortManager._recipe_digest(cand)
+    (port_dir / "foo-1.0.tar.gz").write_bytes(b"tarball payload")
+    assert PortManager._recipe_digest(cand) == with_patch, "tarballs must not count"
 
 
 def test_stale_on_dependency_version_bump(fix, tmp_path):
@@ -907,7 +944,10 @@ def test_stale_state_file_updated_after_rebuild(fix, tmp_path):
     import json
 
     state = json.loads((tmp_path / "foo-1.2.3.json").read_text())
-    assert state == {"use_flags": ["crypto", "ssl"], "tests": False, "deps": []}
+    assert state["use_flags"] == ["crypto", "ssl"]
+    assert state["tests"] is False
+    assert state["deps"] == []
+    assert len(state["recipe"]) == 64
 
 
 def test_stale_via_propagated_flags(fix, tmp_path):
