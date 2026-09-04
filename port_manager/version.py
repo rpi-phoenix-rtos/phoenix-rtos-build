@@ -18,14 +18,59 @@ from __future__ import annotations
 from packaging.version import Version
 
 import pyparsing as pp
+import re
+
+
+# Upstream projects that ship letter patch-releases -- openssl is the archetype:
+# 1.1.1, then 1.1.1a, 1.1.1b, ... 1.1.1w. The requirement grammar below already
+# accepts a trailing letter, but PEP 440 only knows the letters a/b/c/rc, and
+# only as PRE-release markers. That left two defects:
+#
+#   * anything past 'c' was unrepresentable -- PhxVersion("1.1.1w") raised
+#     InvalidVersion and the whole build aborted in discover_ports();
+#   * the letters that DID parse sorted the wrong way. PEP 440 reads '1.1.1a' as
+#     an alpha of 1.1.1, i.e. 1.1.1a < 1.1.1, while upstream means the opposite:
+#     1.1.1a is a patch release AFTER 1.1.1.
+#
+# So a trailing letter is translated to a PEP 440 POST-release (a -> .post1,
+# w -> .post23), which orders exactly as upstream intends
+# (1.1.1 < 1.1.1a < 1.1.1w < 1.1.2) and covers all 26 letters. __str__ returns
+# the original string, so namevers, install directories and logs still read
+# '1.1.1w'.
+_UPSTREAM_LETTER_RELEASE = re.compile(r"^(?P<release>[0-9]+(?:\.[0-9]+){0,3})(?P<letter>[a-z])$")
 
 
 class PhxVersion(Version):
+    def __init__(self, version: str) -> None:
+        """
+        >>> str(PhxVersion("1.1.1w"))
+        '1.1.1w'
+        >>> PhxVersion("1.1.1w") > PhxVersion("1.1.1a")
+        True
+        >>> PhxVersion("1.1.1a") > PhxVersion("1.1.1")
+        True
+        >>> PhxVersion("1.1.2") > PhxVersion("1.1.1w")
+        True
+        """
+        version = version.strip()
+        self._phx_str: str | None = None
+        match = _UPSTREAM_LETTER_RELEASE.match(version)
+        if match is not None:
+            self._phx_str = version
+            letter = ord(match.group("letter")) - ord("a") + 1
+            version = f"{match.group('release')}.post{letter}"
+        super().__init__(version)
+
     def __str__(self) -> str:
         """
         A modified Version.__str__ that does not print added zeros in
-        pre-release, so that '1.1.1a' is printed as '1.1.1a', not as '1.1.1a0'
+        pre-release, so that '1.2b' is printed as '1.2b', not as '1.2b0', and
+        that prints an upstream letter release as written ('1.1.1w'), not as
+        the PEP 440 post-release it is stored as.
         """
+        if self._phx_str is not None:
+            return self._phx_str
+
         parts = []
 
         # Epoch
