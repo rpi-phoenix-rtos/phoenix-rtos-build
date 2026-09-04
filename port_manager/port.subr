@@ -202,11 +202,26 @@ b_port_invalidate_stale_configure() {
 	local stamp="${workdir}/.phoenix-libc-api"
 	local sysroot lib nm key
 
-	# Act only on an AUTOCONF tree, identified by config.status or config.log.
-	# Makefile must NOT be part of this test: for a non-autoconf port (busybox and
-	# friends) the Makefile IS the shipped source, so treating it as configure
-	# output would destroy the work directory.
-	if [ ! -f "${workdir}/config.status" ] && [ ! -f "${workdir}/config.log" ]; then
+	# Identify what kind of CONFIGURED tree this is. Anything else is left alone:
+	# for a non-autoconf, non-cmake port (busybox and friends) the Makefile IS the
+	# shipped source, so treating it as configure output would destroy the work
+	# directory -- which is why Makefile is never part of the detection.
+	#
+	#   autoconf : config.status / config.log at the workdir root, or ffbuild/
+	#              config.log -- ffmpeg is autoconf-like but writes its log there,
+	#              not at the root, which is the only reason it used to be missed.
+	#   cmake    : build/CMakeCache.txt. CMakeCache.txt caches the compiler
+	#              identification and every try_compile / check_function_exists
+	#              answer, i.e. exactly what a libc change invalidates -- so the 11
+	#              CMake ports were silently keeping probes frozen at whenever they
+	#              were first configured.
+	local kind=""
+	if [ -f "${workdir}/config.status" ] || [ -f "${workdir}/config.log" ] ||
+		[ -f "${workdir}/ffbuild/config.log" ]; then
+		kind="autoconf"
+	elif [ -f "${workdir}/build/CMakeCache.txt" ]; then
+		kind="cmake"
+	else
 		return 0
 	fi
 
@@ -247,6 +262,18 @@ b_port_invalidate_stale_configure() {
 	# config.cache goes because it caches the previous run's answers ABOUT THE
 	# LIBC, which is precisely what changed (recipes seeding a committed cross
 	# cache re-copy it before configure, so nothing is lost).
+	if [ "$kind" = "cmake" ]; then
+		# The build dir is pure OUTPUT: every CMake port here does
+		# `mkdir -p "${PREFIX_PORT_WORKDIR}/build"` and configures into it (see
+		# zlib's p_build), so nothing shipped lives there and it can go wholesale.
+		# Recipes guard their configure step on build/Makefile, which disappears
+		# with it, so the next build reconfigures against the new libc.
+		echo "port: libc API changed since this port was configured -- re-running cmake"
+		rm -rf "${workdir}/build"
+		printf '%s\n' "$key" >"$stamp"
+		return 0
+	fi
+
 	echo "port: libc API changed since this port was configured -- re-running configure"
 	rm -f "${workdir}/config.status" "${workdir}/config.cache" \
 		"${workdir}/config.h" "${workdir}/config.log"
