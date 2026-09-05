@@ -281,11 +281,20 @@ ARCH =  $(SIL)@mkdir -p $(@D); \
 	printf "AR  %-24s\n" "$(@F)"; \
 	$(AR) $(ARFLAGS) $@ $^ 2>/dev/null
 
+# What actually goes on the link line: every prerequisite EXCEPT the libc-relink
+# sentinel. binary.mk makes each program depend on the sysroot libphoenix.a so a
+# libc change forces a relink, but that file must not be *linked*: the inputs are
+# expanded inside --whole-archive, which force-loads every libphoenix object and
+# then collides with the same archive reached through -lc/-lm/-lpthread (all three
+# are symlinks to libphoenix.a) -- "multiple definition of `setsid'" and ~40 more
+# for every binary that passes -lpthread, e.g. test-libc-pthread (2026-09-05).
+LINK_INPUTS = $(filter-out $(LIBC_RELINK_DEP),$^)
+
 # --whole-archive is needed for linker to always find constructors in .a files
 LINK = $(SIL)mkdir -p $(@D); \
 	printf "LD  %-24s\n" "$(@F)"; \
 	rm -f "$@.pre"; \
-	$(LD) $(CFLAGS) $(LDFLAGS) -o "$@.pre" $(LDFLAGS_WHOLE_ARCHIVE_BEGIN) $^ $(LDFLAGS_WHOLE_ARCHIVE_END) $(LDLIBS) && \
+	$(LD) $(CFLAGS) $(LDFLAGS) -o "$@.pre" $(LDFLAGS_WHOLE_ARCHIVE_BEGIN) $(LINK_INPUTS) $(LDFLAGS_WHOLE_ARCHIVE_END) $(LDLIBS) && \
 	$(PROJECT_POST_LINK) "$@.pre" "$@"
 
 
