@@ -1,0 +1,155 @@
+Phoenix-RTOS: stop libstdc++ compiling out features the target has.
+
+libstdc++'s feature probes are GCC_TRY_COMPILE_OR_LINK checks run in C++ mode.
+At the point in the bootstrap where libstdc++ is configured, libstdc++.a does
+not exist yet, so every one of them fails with
+
+  ld: cannot find -lstdc++: No such file or directory
+
+irrespective of what the target actually supports. Nothing warns and nothing
+fails to build; the library is simply crippled at runtime. Separately, the
+monotonic/realtime/nanosleep probes are wrapped in
+"#if _POSIX_TIMERS > 0 && defined(_POSIX_MONOTONIC_CLOCK)" and libphoenix
+defines no POSIX option macros, so those probes fail to even compile.
+
+This patch hardcodes the affected features for *-phoenix*, which is what every
+other non-glibc target in these two switch statements already does.
+
+Observed consequences of the previous state, all silent:
+  - std::chrono::steady_clock resolved to time(): WHOLE-SECOND resolution.
+    This capped SuperTuxKart at exactly 1 fps.
+  - std::this_thread::yield() was a no-op.
+  - std::random_device returned the same sequence on every boot (mt19937
+    seeded with the constant 5489).
+  - std::thread::hardware_concurrency() returned 0 on a 4-core part.
+  - std::filesystem::is_symlink() was always false, because lstat was aliased
+    to stat; canonical() returned unresolved paths while clearing the error
+    code, and remove_all() recursed into a symlinked directory's target.
+  - last_write_time() had 1-second resolution.
+
+--- a/libstdc++-v3/configure	2026-09-09 23:32:34.147352203 +0200
++++ b/libstdc++-v3/configure	2026-09-09 23:32:34.163419193 +0200
+@@ -21682,6 +21682,24 @@
+         ac_has_nanosleep=yes
+         ac_has_sched_yield=yes
+         ;;
++      # Phoenix-RTOS: hardcode, exactly as the other non-glibc targets above do.
++      # The link tests further down cannot answer this question here, for two
++      # independent reasons. libstdc++ itself does not exist yet, so every C++
++      # link test fails with "cannot find -lstdc++" whatever the target
++      # supports; and the probe body is wrapped in
++      # "#if _POSIX_TIMERS > 0 && defined(_POSIX_MONOTONIC_CLOCK)", which
++      # libphoenix does not define, so its "timespec tp;" is preprocessed away
++      # and the program does not even compile. libphoenix does provide
++      # clock_gettime with a real CLOCK_MONOTONIC, plus clock_getres, nanosleep
++      # and sched_yield. Without these four, std::chrono::steady_clock silently
++      # falls back to time() -- WHOLE-SECOND resolution -- and
++      # std::this_thread::yield becomes a no-op.
++      phoenix*)
++        ac_has_clock_monotonic=yes
++        ac_has_clock_realtime=yes
++        ac_has_nanosleep=yes
++        ac_has_sched_yield=yes
++        ;;
+       openbsd*)
+         ac_has_clock_monotonic=yes
+         ac_has_clock_realtime=yes
+@@ -51142,6 +51160,98 @@
+       printf "%s\n" "#define HAVE_TANHF 1" >>confdefs.h
+ 
+       printf "%s\n" "#define HAVE_STRTOLD 1" >>confdefs.h
++
++      # Phoenix-RTOS: hardcode the features libphoenix DOES provide but that
++      # libstdc++ cannot detect at this point in the bootstrap. Every check
++      # below is a GCC_TRY_COMPILE_OR_LINK run in C++ mode, and libstdc++.a
++      # does not exist yet, so they all fail with
++      #
++      #   ld: cannot find -lstdc++: No such file or directory
++      #
++      # regardless of what the target supports. The result is a silently
++      # crippled library -- no warning, no build failure, wrong behaviour at
++      # runtime. Each macro below was confirmed twice: the symbol or struct
++      # member exists in libphoenix, and autoconf itself answers "yes" for it
++      # when this same configure is re-run against a sysroot that already has
++      # libstdc++.a installed.
++      #
++      # Deliberately NOT set here: HAVE_FENV_H (the sysroot ships a libmcs
++      # fenv.h whose body is a #error, so defining it breaks the build),
++      # HAVE_DIRFD (genuinely absent from libphoenix), and HAVE_POLL /
++      # HAVE_LSEEK / _GLIBCXX_USE_FSEEKO_FTELLO (no live users, or a slower
++      # path than the one taken today).
++
++      # std::random_device. Without it src/c++11/random.cc falls back to a
++      # mt19937 seeded with the constant 5489, i.e. the SAME sequence in every
++      # process on every boot.
++      printf "%s\n" "#define HAVE_GETENTROPY 1" >>confdefs.h
++
++      # std::filesystem. Without it ops-common.h aliases lstat to stat, so
++      # is_symlink() is ALWAYS false, canonical() returns paths whose symlink
++      # components are unresolved while clearing the error code, and
++      # remove_all() recurses into a symlinked directory's target.
++      printf "%s\n" "#define _GLIBCXX_USE_LSTAT 1" >>confdefs.h
++
++      # read_symlink(). Needed together with USE_LSTAT for canonical() to
++      # resolve a symlink at all.
++      printf "%s\n" "#define HAVE_READLINK 1" >>confdefs.h
++
++      # std::thread::hardware_concurrency(), which otherwise returns 0 on
++      # this 4-core part.
++      printf "%s\n" "#define _GLIBCXX_USE_SC_NPROCESSORS_ONLN 1" >>confdefs.h
++
++      # std::filesystem::last_write_time(). The fallback reads st_mtime and
++      # drops the nanoseconds, i.e. 1-second resolution.
++      printf "%s\n" "#define _GLIBCXX_USE_ST_MTIM 1" >>confdefs.h
++
++      # std::filesystem::current_path(), which otherwise always fails with
++      # errc::function_not_supported.
++      printf "%s\n" "#define _GLIBCXX_USE_GETCWD 1" >>confdefs.h
++
++      # in_avail()/readsome(), which otherwise return 0 for a regular file.
++      printf "%s\n" "#define HAVE_S_ISREG 1" >>confdefs.h
++
++      # the microsecond fallback for system_clock.
++      printf "%s\n" "#define _GLIBCXX_USE_GETTIMEOFDAY 1" >>confdefs.h
++
++      # directory_entry's file type. Without it every entry comes back as
++      # file_type::none and each one costs an extra stat() -- expensive over
++      # an NFS root.
++      printf "%s\n" "#define HAVE_STRUCT_DIRENT_D_TYPE 1" >>confdefs.h
++
++      # vectored xsputn.
++      printf "%s\n" "#define HAVE_WRITEV 1" >>confdefs.h
++
++      # filesystem::create_directory.
++      printf "%s\n" "#define _GLIBCXX_USE_MKDIR 1" >>confdefs.h
++
++      # filesystem::current_path(p).
++      printf "%s\n" "#define _GLIBCXX_USE_CHDIR 1" >>confdefs.h
++
++      # filesystem::permissions.
++      printf "%s\n" "#define _GLIBCXX_USE_CHMOD 1" >>confdefs.h
++
++      # filesystem::permissions on a descriptor.
++      printf "%s\n" "#define _GLIBCXX_USE_FCHMOD 1" >>confdefs.h
++
++      # filesystem::permissions with nofollow.
++      printf "%s\n" "#define _GLIBCXX_USE_FCHMODAT 1" >>confdefs.h
++
++      # filesystem::last_write_time(p, t).
++      printf "%s\n" "#define _GLIBCXX_USE_UTIME 1" >>confdefs.h
++
++      # std::tmpnam, otherwise not declared in <cstdio>.
++      printf "%s\n" "#define _GLIBCXX_USE_TMPNAM 1" >>confdefs.h
++
++      # filesystem::create_hard_link.
++      printf "%s\n" "#define HAVE_LINK 1" >>confdefs.h
++
++      # filesystem::create_symlink.
++      printf "%s\n" "#define HAVE_SYMLINK 1" >>confdefs.h
++
++      # filesystem::resize_file.
++      printf "%s\n" "#define HAVE_TRUNCATE 1" >>confdefs.h
++
+     ;;
+   *)
+     as_fn_error $? "No support for this host/target combination." "$LINENO" 5

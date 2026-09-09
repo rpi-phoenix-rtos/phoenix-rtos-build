@@ -250,6 +250,36 @@ build_libstdcpp() {
     # --with-pic -> build library files as PIC files
 
     # now, we use files from generic for every category in libstdc++v3/config directory
+
+    # NOTE: libstdc++ feature detection for this target is fixed by
+    # gcc-16.2.0-12-libstdcxx-phoenix-features.patch, NOT by flags here.
+    #
+    # Why it cannot be a flag or a config cache: every libstdc++ feature probe
+    # is a GCC_TRY_COMPILE_OR_LINK run in C++ mode, and libstdc++.a does not
+    # exist yet when this configure runs, so they all fail with
+    # "ld: cannot find -lstdc++" no matter what the target supports. The
+    # clock/nanosleep probes have a second, independent failure: their body is
+    # wrapped in "#if _POSIX_TIMERS > 0 && defined(_POSIX_MONOTONIC_CLOCK)" and
+    # libphoenix defines no POSIX option macros, so "timespec tp;" is
+    # preprocessed away and the probe does not compile. Their results live in
+    # plain shell variables (ac_has_clock_monotonic et al.), so no cache
+    # variable can override them either. The patch hardcodes the answers in the
+    # *-phoenix* stanza, which is what every other non-glibc target does.
+    #
+    # Do NOT pass --enable-libstdcxx-time here: that takes the branch which runs
+    # the broken link tests instead of the target case the patch extends.
+    # Leaving it at its default (auto) is what makes the patch effective.
+    #
+    # After any toolchain rebuild, check the INSTALLED header rather than the
+    # configure output:
+    #   grep -E '_GLIBCXX_USE_(CLOCK_MONOTONIC|CLOCK_REALTIME|NANOSLEEP|SCHED_YIELD|LSTAT|ST_MTIM|SC_NPROCESSORS_ONLN)' \
+    #     "${SYSROOT}/include/c++/${TARGET}/bits/c++config.h"
+    # All of these must be "#define ... 1". When they were #undef,
+    # std::chrono::steady_clock had WHOLE-SECOND resolution (it capped
+    # SuperTuxKart at exactly 1 fps), std::this_thread::yield was a no-op,
+    # std::random_device returned the same sequence every boot,
+    # hardware_concurrency() returned 0 on this 4-core part, and
+    # std::filesystem::is_symlink() was always false.
     ../../../libstdc++-v3/configure --target="${TARGET}" \
                                     --host="${TARGET}" \
                                     --prefix="${SYSROOT}" \
