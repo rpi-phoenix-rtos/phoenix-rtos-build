@@ -40,7 +40,7 @@ b_log "Building phoenix-rtos-usb (usb)"
 # server. libvcmbox.a is built+installed into the shared per-target prefix by
 # the preceding "phoenix-rtos-devices all install"; order matters so the linker
 # resolves the libusbxhci -> libvcmbox reference.
-make -C "phoenix-rtos-usb" usb usb-install USB_HCD_LIBS="libusbxhci libvcmbox" USB_HOSTDRV_LIBS="libusbdrv-usbkbd libusbdrv-usbmouse"
+make -C "phoenix-rtos-usb" usb usb-install USB_HCD_LIBS="libusbxhci libvcmbox" USB_HOSTDRV_LIBS="libusbdrv-usbkbd libusbdrv-usbmouse libusbdrv-umass"
 
 b_log "Building coreutils"
 make -C "phoenix-rtos-utils" all install
