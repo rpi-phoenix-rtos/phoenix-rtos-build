@@ -1025,3 +1025,104 @@ def test_propagation_no_issue_when_dep_already_resolved(fix):
     pm = run_dry_build(all_ports, to_build)
     # bar is resolved because baz also requires it directly
     assert "bar" in pm.mapping["baz-1.0.0"]
+
+
+def write_fake_libc(sysroot, payload=b""):
+    """A minimal ar archive with one aarch64 ELF relocatable member, as the
+    sysroot libphoenix.a. `payload` varies its content (and so its sha256)."""
+    elf = bytearray(64)
+    elf[0:4] = b"\x7fELF"
+    elf[4] = 2  # ELFCLASS64
+    elf[5] = 1  # ELFDATA2LSB
+    elf[16:18] = (1).to_bytes(2, "little")  # ET_REL
+    elf[18:20] = (0xB7).to_bytes(2, "little")  # EM_AARCH64
+    member = bytes(elf) + payload
+    hdr = f"{'x.o/':<16}{'0':<12}{'0':<6}{'0':<6}{'644':<8}{len(member):<10}`\n"
+    data = b"!<arch>\n" + hdr.encode() + member + (b"\n" if len(member) & 1 else b"")
+    (sysroot / "lib").mkdir(parents=True, exist_ok=True)
+    (sysroot / "lib" / "libphoenix.a").write_bytes(data)
+
+
+@pytest.fixture
+def sysroot(tmp_path, monkeypatch):
+    root = tmp_path / "sysroot"
+    write_fake_libc(root)
+    monkeypatch.setenv("PREFIX_SYSROOT", str(root))
+    monkeypatch.delenv("CROSS", raising=False)  # no toolchain libs under pytest
+    return root
+
+
+def test_link_state_saved(fix, tmp_path, sysroot):
+    """The digest of the implicit link libraries is part of the saved state."""
+    import json
+
+    run_dry_build({"foo-1.2.3": {}}, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    state = json.loads((tmp_path / "foo-1.2.3.json").read_text())
+    assert list(state["link"]) == ["libphoenix.a"]
+    assert len(state["link"]["libphoenix.a"]) == 64
+
+
+def test_no_relink_when_libc_unchanged(fix, tmp_path, sysroot):
+    """An unchanged libphoenix.a -- even rewritten by the core stage -- relinks nothing."""
+    all_ports = {"foo-1.2.3": {"requires": "bar>=1.0"}, "bar-1.0.0": {}}
+    run_dry_build(all_ports, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    write_fake_libc(sysroot)  # same content, new mtime
+    pm = run_dry_build(all_ports, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    assert not pm.relink_ports
+    assert not pm.stale_ports
+
+
+def test_relink_not_rebuild_on_libc_change(fix, tmp_path, sysroot):
+    """A changed libphoenix.a RELINKS every port and cleans none of them.
+
+    The regression this guards: the xterm port kept shipping a binary linked
+    against a libphoenix two fixes old, because its Makefile does not list
+    libphoenix.a and the build state did not track it (2026-09-27).
+    """
+    all_ports = {"foo-1.2.3": {"requires": "bar>=1.0"}, "bar-1.0.0": {}}
+    run_dry_build(all_ports, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    write_fake_libc(sysroot, b"a libc fix")
+    pm = run_dry_build(all_ports, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    assert pm.relink_ports == {"foo-1.2.3", "bar-1.0.0"}
+    assert not pm.stale_ports
+    assert pm.relink_exec_header == "0200b700"  # ET_EXEC, EM_AARCH64, little-endian
+
+    # The new digest is saved, so the next run relinks nothing.
+    pm = run_dry_build(all_ports, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    assert not pm.relink_ports
+
+
+def test_relink_when_state_predates_link_key(fix, tmp_path, sysroot):
+    """A state written before the link key existed relinks, and does not clean:
+    nobody recorded what the port was linked against, and cleaning every port
+    on the first run would rebuild the whole ports stage."""
+    import json
+
+    run_dry_build({"foo-1.2.3": {}}, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    state_file = tmp_path / "foo-1.2.3.json"
+    state = json.loads(state_file.read_text())
+    del state["link"]
+    state_file.write_text(json.dumps(state))
+
+    pm = run_dry_build({"foo-1.2.3": {}}, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    assert pm.relink_ports == {"foo-1.2.3"}
+    assert not pm.stale_ports
+
+
+def test_stale_wins_over_relink(fix, tmp_path, sysroot):
+    """A port that is rebuilt from scratch anyway is not also relinked."""
+    all_ports = {"foo-1.2.3": {"iuse": "ssl"}}
+    run_dry_build(all_ports, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    write_fake_libc(sysroot, b"a libc fix")
+    pm = run_dry_build(all_ports, {"ports": [{"name": "foo", "use": ["ssl"]}]}, state_dir=tmp_path)
+    assert pm.stale_ports == {"foo-1.2.3"}
+    assert not pm.relink_ports
+
+
+def test_no_relink_without_link_libs(fix, tmp_path, monkeypatch):
+    """No sysroot and no cross compiler: an empty digest, which never relinks."""
+    monkeypatch.delenv("PREFIX_SYSROOT", raising=False)
+    monkeypatch.delenv("CROSS", raising=False)
+    run_dry_build({"foo-1.2.3": {}}, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    pm = run_dry_build({"foo-1.2.3": {}}, {"ports": [{"name": "foo"}]}, state_dir=tmp_path)
+    assert not pm.relink_ports

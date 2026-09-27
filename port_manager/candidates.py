@@ -216,6 +216,14 @@ class InstallableCandidate(Candidate):
 
             extras_info.append("+tests")
 
+        if str(self) in kwargs.get("relink_ports", ()):
+            # port_prepare.sh drops the port's linked programs (or runs its
+            # p_relink) so that p_build links them again against the new libs.
+            port_env["PORT_RELINK"] = "y"
+            port_env["PORT_RELINK_EXEC_HEADER"] = kwargs["relink_exec_header"]
+
+            extras_info.append("relink")
+
         if len(extras_info) > 0:
             info += f" ({', '.join(extras_info)})"
 

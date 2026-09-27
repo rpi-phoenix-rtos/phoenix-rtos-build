@@ -37,6 +37,7 @@ from .candidates import Candidate, OsCandidate, InstallableCandidate
 from .resolver import PhxResolver, CandidatesDict
 from .required_use import parse_required_use
 from . import build_layer
+from . import link_inputs
 
 T = TypeVar("T")
 
@@ -74,6 +75,11 @@ def require_bool(dct: dict[str, Any], key: str, default: bool) -> bool:
         logger.error(f"'{key}' should be bool but got {val} ({val.__class__})")
         sys.exit(1)
     return val
+
+
+# Build-state key of the implicit link libraries' digests (see link_inputs).
+# Compared apart from the rest of the state: a change relinks, not rebuilds.
+LINK_STATE_KEY = "link"
 
 
 class PortManager:
@@ -114,6 +120,11 @@ class PortManager:
         self.ports_skipped: list[str] = []
         self._state_dir = Path(state_dir) if state_dir else None
         self.stale_ports: set[str] = set()
+        # Ports to RELINK (not rebuild): only their implicit link libraries
+        # changed. See clean_stale_ports().
+        self.relink_ports: set[str] = set()
+        self._link_digest: dict[str, str] | None = None
+        self.relink_exec_header: str | None = None
 
     def add_candidate(self, candidate: Candidate) -> None:
         name = candidate.name
@@ -294,12 +305,27 @@ class PortManager:
                 h.update(b"<unreadable>")
         return h.hexdigest()
 
+    def _link_state(self) -> dict[str, str]:
+        """sha256 of each library every port links implicitly (libphoenix.a,
+        libgcc.a, libstdc++.a, libsupc++.a), computed once per run.
+
+        Empty when none can be found (no sysroot and no cross compiler, e.g.
+        under pytest): an empty digest never triggers a relink.
+        """
+        if self._link_digest is None:
+            libs = link_inputs.resolve(os.environ)
+            self._link_digest = link_inputs.digest(libs)
+            if link_inputs.LIBC in libs:
+                self.relink_exec_header = link_inputs.exec_header(libs[link_inputs.LIBC])
+        return self._link_digest
+
     def _build_state(self, cand: InstallableCandidate) -> dict:
         return {
             "use_flags": sorted(cand.use_flags),
             "tests": cand.build_tests,
             "deps": self._dep_namevers(cand),
             "recipe": self._recipe_digest(cand),
+            LINK_STATE_KEY: self._link_state(),
         }
 
     def clean_stale_ports(self) -> None:
@@ -311,7 +337,17 @@ class PortManager:
         so the first run after this change treats every port as stale and
         rebuilds the whole ports stage once. That is the intended cost -- the
         alternative is keeping binaries whose dependency versions nobody
-        verified."""
+        verified.
+
+        The LINK INPUTS (LINK_STATE_KEY) are compared separately and only
+        RELINK a port: a changed libphoenix.a or toolchain runtime does not
+        change a single object file, only what the linker pulls into each
+        program. Rebuilding every port from scratch on every libc commit would
+        cost hours; relinking costs minutes. Without it the ports never
+        relinked at all -- their makefiles do not know about libphoenix.a -- and
+        xterm shipped a tcsetattr() two libc fixes old (2026-09-27). A state
+        without the key (written before it existed, or absent) also relinks,
+        since nobody recorded what the port was linked against."""
         state_dir = self._get_state_dir()
         if state_dir is None:
             return
@@ -324,16 +360,44 @@ class PortManager:
             if isinstance(c, InstallableCandidate)
         }
 
-        # Find directly stale candidates (saved state differs from current)
+        # Find directly stale candidates (saved state differs from current),
+        # and the ones whose link inputs alone changed.
+        relink_why: dict[str, list[str]] = {}
         for nv, c in all_cands.items():
+            current = self._build_state(c)
+            link = current.pop(LINK_STATE_KEY)
             state_file = state_dir / f"{nv}.json"
-            if not state_file.exists():
-                continue
-            with open(state_file, encoding="utf-8") as f:
-                saved = json.load(f)
-            if saved != self._build_state(c):
+            saved: dict = {}
+            if state_file.exists():
+                with open(state_file, encoding="utf-8") as f:
+                    saved = json.load(f)
+            saved_link = saved.pop(LINK_STATE_KEY, None) or {}
+            if saved and saved != current:
                 self.stale_ports.add(nv)
+            elif link and saved_link != link:
+                relink_why[nv] = (
+                    sorted(k for k, v in link.items() if saved_link.get(k) != v)
+                    if saved_link else ["not recorded"]
+                )
 
+        if relink_why and self.relink_exec_header is None:
+            # Without the target's ELF type the default relink cannot tell the
+            # port's programs from anything else in its tree: rebuild instead.
+            logger.warning("Link inputs changed but the target ELF type is unknown, rebuilding")
+            self.stale_ports.update(relink_why)
+            relink_why.clear()
+
+        self._clean_stale(state_dir, all_cands)
+
+        # A cleaned port is rebuilt from scratch, which links it anyway.
+        for nv in sorted(relink_why.keys() - self.stale_ports):
+            logger.info(
+                f"Link inputs changed for {all_cands[nv]} ({', '.join(relink_why[nv])}), relinking"
+            )
+            self.relink_ports.add(nv)
+
+    def _clean_stale(self, state_dir: Path, all_cands: dict[str, InstallableCandidate]) -> None:
+        """Clean self.stale_ports and all their transitive dependents."""
         if not self.stale_ports:
             return
 
@@ -537,6 +601,8 @@ class PortManager:
                 roll_logs=self.roll_logs,
                 dry=self.dry,
                 ports_installed=self.ports_installed,
+                relink_ports=self.relink_ports,
+                relink_exec_header=self.relink_exec_header,
             )
 
         self.save_build_state()
