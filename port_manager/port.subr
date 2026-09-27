@@ -301,6 +301,46 @@ b_port_invalidate_stale_configure() {
 	printf '%s\n' "$key" >"$stamp"
 }
 
+# b_port_relink(dir)
+#
+# Default relink step, run by port_prepare.sh when the port's link inputs
+# (libphoenix.a, libgcc.a, libstdc++.a, libsupc++.a -- see port_manager's
+# link_inputs.py) changed since it was last built and the port defines no
+# p_relink of its own.
+#
+# Ports link statically, and no port's build system lists those libraries as a
+# prerequisite, so after a libc change `make` finds every program up to date and
+# the port ships the binary linked against the previous libc: xterm kept a
+# tcsetattr() that sign-extended its ioctl request after libtty stopped
+# truncating it, and died at start with EINVAL (2026-09-27).
+#
+# Deleting the programs makes the port's own build relink them from the objects
+# it already has; nothing is recompiled. A program is a file under the port's
+# build directory whose ELF header says executable (ET_EXEC) for the target
+# machine (${PORT_RELINK_EXEC_HEADER}, derived from libphoenix.a), so objects,
+# archives, shared objects and host build helpers are never touched, nor are
+# CMake's compiler-probe programs under CMakeFiles/ (their results are cached).
+#
+# A port whose build does NOT recreate a deleted program (it links under a guard
+# on some other file, or ships a prebuilt one) must define p_relink instead; the
+# safe fallback there is `rm -rf "${PREFIX_PORT_BUILD}"`, a full rebuild.
+b_port_relink() {
+	local dir="${1:?dir missing}"
+	local want="${PORT_RELINK_EXEC_HEADER:?}"
+	local f hdr n=0
+
+	[ -d "${dir}" ] || return 0
+	while IFS= read -r -d '' f; do
+		# Bytes 0-3: ELF magic; bytes 16-19: e_type, e_machine.
+		hdr="$(od -An -tx1 -N20 "${f}" 2>/dev/null | tr -d ' \n')"
+		if [ "${hdr:0:8}" = "7f454c46" ] && [ "${hdr:32:8}" = "${want}" ]; then
+			rm -f "${f}"
+			n=$((n + 1))
+		fi
+	done < <(find "${dir}" -path '*/CMakeFiles' -prune -o -type f -perm /111 -print0)
+	echo "port: link inputs changed -- removed ${n} linked program(s) so they are relinked"
+}
+
 export -f b_port_download b_port_apply_patches b_install_host \
-	b_port_invalidate_stale_configure \
+	b_port_invalidate_stale_configure b_port_relink \
 	b_dependency_dir b_use b_use_ensure

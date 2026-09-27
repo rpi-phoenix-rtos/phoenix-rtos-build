@@ -84,6 +84,7 @@ load_port_def() {
 	unset p_prepare
 	unset p_build
 	unset p_build_test
+	unset p_relink
 
 	# shellcheck disable=1090
 	source "${def_path}"

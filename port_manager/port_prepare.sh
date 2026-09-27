@@ -69,6 +69,19 @@ source "${source_dir}/port.subr"
 # shellcheck disable=2154 # def_path loaded from port.def.sh
 export PREFIX_PORT_WORKDIR="${PREFIX_PORT_BUILD?}/${src_path}"
 
+# The libraries every port links implicitly changed since this port was built
+# (port_manager: "Link inputs changed ..., relinking"). Drop its linked programs,
+# or run its own p_relink, so p_build relinks them. Before extraction, so a
+# p_relink that removes the whole work directory gets a clean rebuild.
+if [ "${PORT_RELINK:-}" = "y" ] && [ -d "${PREFIX_PORT_BUILD}" ]; then
+	if [[ $(type -t p_relink) == function ]]; then
+		echo "port: link inputs changed -- running p_relink"
+		p_relink
+	else
+		b_port_relink "${PREFIX_PORT_BUILD}"
+	fi
+fi
+
 if [ ! -d "${PREFIX_PORT_WORKDIR}" ]; then
 	[ -d "${PREFIX_BUILD_MARKERS}" ] && rm -r "${PREFIX_BUILD_MARKERS}"
 
