@@ -178,6 +178,11 @@ CXXFLAGS += -ggdb3
 # set optimization level (target/project-dependant)
 CFLAGS += $(OLVL)
 CXXFLAGS += $(OLVL)
+# ...and export it to ports: EXPORT_*FLAGS were captured above, before the level was
+# added, and autoconf adds no -O2 of its own when CFLAGS is already set -- so every
+# autotools port (libnfs, mbedtls, freetype, bash, ...) was being built at -O0.
+EXPORT_CFLAGS += $(OLVL)
+EXPORT_CXXFLAGS += $(OLVL)
 
 # allow appending custom project CFLAGS/CXXFLAGS by env
 CFLAGS += $(USER_CFLAGS)
