@@ -16,7 +16,7 @@
 : "${PORTS_MIRROR_BASEURL:?variable unset}"
 
 : "${PORTS_DOWNLOAD_RETRIES:=5}"
-: "${PORTS_DOWNLOAD_TIMEOUT:=5}"
+: "${PORTS_DOWNLOAD_TIMEOUT:=30}"
 : "${PORTS_ALWAYS_USE_MIRROR:=0}"
 
 set -e
@@ -32,8 +32,11 @@ b_port_download() {
 
 	run_wget() {
 		local url="${1?}"
+		# --retry-on-http-error: wget does not retry an HTTP error by default, so one 5xx
+		# from an overloaded server (freedesktop.org, 2026-09-30) went straight to the mirror.
 		wget --tries="${PORTS_DOWNLOAD_RETRIES}" \
 			--timeout="${PORTS_DOWNLOAD_TIMEOUT}" \
+			--waitretry=10 --retry-connrefused --retry-on-http-error=429,500,502,503,504 \
 			--progress="dot:mega" \
 			"${url}" -O "${PREFIX_PORT}/${filename}.part" --no-check-certificate
 	}
