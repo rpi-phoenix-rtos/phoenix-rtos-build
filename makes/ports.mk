@@ -14,16 +14,18 @@
 # Until that TODO is done this list is a SECOND source of truth for a conflictable
 # port's version, and it drifts silently: ports_iflags/ports_ldir below expand it
 # into -I/-L flags for every make-built component, so a version here that no
-# longer matches openssl111/port.def.sh points the whole system at a
-# versioned-ports/openssl-<old>/ directory that the ports stage never creates.
-# Keep these two lines in step with the recipe (bumped together 2026-09-04,
-# 1.1.1a -> 1.1.1w).
+# longer matches openssl/port.def.sh points the whole system at a
+# versioned-ports/openssl-<old>/ directory that the ports stage never creates
+# (or, in an existing buildroot, at the OLD library's headers, which then come
+# first on every port's include path). Keep these two lines in step with the
+# recipe (bumped together 2026-09-04, 1.1.1a -> 1.1.1w; 2026-09-30, 1.1.1w ->
+# 3.5.9).
 PORTS_SUPPORTED_VERSIONS :=
-PORTS_SUPPORTED_VERSIONS += openssl=1.1.1w
+PORTS_SUPPORTED_VERSIONS += openssl=3.5.9
 
 
 PORTS_DEFAULT_VERSIONS :=
-PORTS_DEFAULT_VERSIONS += openssl=1.1.1w
+PORTS_DEFAULT_VERSIONS += openssl=3.5.9
 
 
 PORTS_VERSIONS := $(PORTS_DEFAULT_VERSIONS) $(PORTS_DEFAULT_VERSIONS_PROJECT)
