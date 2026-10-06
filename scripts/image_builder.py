@@ -128,7 +128,7 @@ class PloCmdFactory:
             return PloCmdKernel(*cmd_args, **kwargs)
         if cmd_name in ("app", "blob"):
             return PloCmdApp(*cmd_args, **kwargs)
-        if cmd_name in ("call"):
+        if cmd_name == "call":
             return PloCmdCall(*cmd_args, **kwargs)
 
         # TODO: add compile-time checks for scripts validity (eg. memory regions cross-check)?
@@ -311,7 +311,7 @@ class PloCmdApp(PloCmdBase):
 
     def _parse_flags(self, extra_flags: str):
         # flags attr takes precedence
-        if self.flags and isinstance(self.flags, str):
+        if self.flags:
             self.flags = CmdAppFlags(self.flags)
             return
 
@@ -319,6 +319,8 @@ class PloCmdApp(PloCmdBase):
             self.flags = CmdAppFlags.EXEC
         elif extra_flags == "-xn":
             self.flags = CmdAppFlags.EXEC_NO_COPY
+        else:
+            self.flags = CmdAppFlags.NONE
 
     def __post_init__(self, extra_flags: str = '', filename_args: str = ''):
         self._parse_flags(extra_flags)
@@ -428,9 +430,9 @@ class PloScript:
     def __post_init__(self):
         # fix types
         if isinstance(self.size, str):
-            self.size = int(self.size)
+            self.size = int(self.size, 0)
         if isinstance(self.offs, str):
-            self.offs = int(self.offs)
+            self.offs = int(self.offs, 0)
 
     def write(self, file: TextIO, enc: PloScriptEncoding = PloScriptEncoding.STRING_MAGIC_V1) -> List[ProgInfo]:
         prog_offs = self.offs + self.size  # init with "just after the script"
@@ -472,10 +474,10 @@ def render_val(tpl: Any, **kwargs) -> Any:  # mostly str | List[str] | Dict[str,
     return tpl
 
 
-def str2bool(v: str | bool) -> bool:
+def str2bool(v: str | bool | int | None) -> bool:
     """False is denoted by empty string or any literal sensible false values"""
-    if isinstance(v, bool):
-        return v
+    if not isinstance(v, str):
+        return bool(v)
     return v.lower() not in ("", "no", "false", "n", "0")
 
 
@@ -655,7 +657,7 @@ def parse_args() ->argparse.Namespace:
     parser.add_argument("--prefix-prog-stripped", **env_or_required("PREFIX_PROG_STRIPPED"), help="prog.stripped directory path")
     parser.add_argument("--plo-script-dir", **env_or_required("PLO_SCRIPT_DIR"), help="output PLO scripts directory path")
 
-    subparsers = parser.add_subparsers(help="subcommands", dest="cmd")
+    subparsers = parser.add_subparsers(help="subcommands", dest="cmd", required=True)
     ptable = subparsers.add_parser("ptable", help="prepare partition tables")
     ptable.add_argument("--nvm", type=str, default="nvm.yaml", help="Path to NVM config (default: %(default)s)")
 
@@ -774,10 +776,11 @@ def main() -> int:
             for name in args.contents:
                 if ":" in name:
                     name, offs = name.split(":")
-                    assert int(offs) >= curr_offs, f"offset {offs} larger than current offset ({curr_offs})"
-                    curr_offs = int(offs)
+                    assert int(offs, 0) >= curr_offs, f"offset {offs} is smaller than current offset ({curr_offs})"
+                    curr_offs = int(offs, 0)
 
                 contents.append(ProgInfo(Path(name), curr_offs, os.path.getsize(name)))
+                curr_offs += contents[-1].size
 
         return write_image(contents, PREFIX_BOOT / target_part.filename, target_part.size, target_part.flash.padding_byte)
 
